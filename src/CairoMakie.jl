@@ -6,8 +6,10 @@ using AbstractPlotting: convert_attribute, @extractvalue, LineSegments, to_ndim,
 using AbstractPlotting: @info, @get_attribute, Combined
 using Colors, GeometryTypes
 using AbstractPlotting: to_value, to_colormap, extrema_nan
-using Cairo, FileIO
+using FileIO
 using LinearAlgebra
+import Cairo
+using Cairo: CairoContext, CairoARGBSurface, CairoSVGSurface
 
 @enum RenderType SVG PNG
 
@@ -167,6 +169,14 @@ end
 function color2tuple3(c)
     (red(c), green(c), blue(c))
 end
+function colorant2tuple4(c)
+    (red(c), green(c), blue(c), alpha(c))
+end
+
+mesh_pattern_set_corner_color(pattern, id, c::Color3) =
+    Cairo.mesh_pattern_set_corner_color_rgb(pattern, id, color2tuple3(c)...)
+mesh_pattern_set_corner_color(pattern, id, c::Colorant{T,4} where T) =
+    Cairo.mesh_pattern_set_corner_color_rgba(pattern, id, colorant2tuple4(c)...)
 
 function draw_atomic(scene::Scene, screen::CairoScreen, primitive::Mesh)
     @get_attribute(primitive, (color,))
@@ -188,9 +198,9 @@ function draw_atomic(scene::Scene, screen::CairoScreen, primitive::Mesh)
         Cairo.mesh_pattern_line_to(pattern, t2...)
         Cairo.mesh_pattern_line_to(pattern, t3...)
 
-        Cairo.mesh_pattern_set_corner_color_rgb(pattern, 0, color2tuple3(c1)...)
-        Cairo.mesh_pattern_set_corner_color_rgb(pattern, 1, color2tuple3(c2)...)
-        Cairo.mesh_pattern_set_corner_color_rgb(pattern, 2, color2tuple3(c3)...)
+        mesh_pattern_set_corner_color(pattern, 0, c1)
+        mesh_pattern_set_corner_color(pattern, 1, c2)
+        mesh_pattern_set_corner_color(pattern, 2, c3)
 
         Cairo.mesh_pattern_end_patch(pattern)
 
@@ -247,12 +257,15 @@ function draw_image(scene, screen, attributes)
     w, h = xymax .- xy
     interp = to_value(get(attributes, :interpolate, true))
     interp = interp ? Cairo.FILTER_BEST : Cairo.FILTER_NEAREST
-    Cairo.save(ctx);
-    pattern = Cairo.CairoPattern(to_cairo_image(image, attributes))
-    Cairo.pattern_set_extend(pattern, Cairo.EXTEND_PAD)
-    Cairo.pattern_set_filter(pattern, interp)
-    Cairo.set_source(ctx, pattern)
+    s = to_cairo_image(image, attributes)
     Cairo.rectangle(ctx, xy..., w, h)
+    Cairo.save(ctx)
+    Cairo.translate(ctx, xy...)
+    Cairo.scale(ctx, w/s.width, h/s.height)
+    Cairo.set_source_surface(ctx, s, 0, 0)
+    p = Cairo.get_source(ctx)
+    # Set filter doesn't work!?
+    Cairo.pattern_set_filter(p, interp)
     Cairo.fill(ctx)
     Cairo.restore(ctx)
 end
@@ -401,7 +414,7 @@ function draw_atomic(scene::Scene, screen::CairoScreen, primitive::Text)
         set_font_matrix(ctx, mat)
         # set_font_size(ctx, 16)
         # TODO this only works in 2d
-        rotate(ctx, 2acos(r[4]))
+        Cairo.rotate(ctx, 2acos(r[4]))
         if N == length(position) # if one position per glyph
             Cairo.show_text(ctx, string(txt[i]))
         else
@@ -495,7 +508,7 @@ end
 function AbstractPlotting.backend_show(x::CairoBackend, io::IO, m::MIME"image/png", scene::Scene)
     screen = CairoScreen(scene, io)
     cairo_draw(screen, scene)
-    write_to_png(screen.surface, io)
+    Cairo.write_to_png(screen.surface, io)
     (x, scene)
 end
 
@@ -513,6 +526,7 @@ function __init__()
     dir = mktempdir()
     temp_file = joinpath(dir, "cairo.svg")
     AbstractPlotting.register_backend!(CairoBackend(temp_file))
+    AbstractPlotting.inline!(true)
     atexit() do
         rm(dir, force = true, recursive = true)
     end
